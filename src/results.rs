@@ -219,6 +219,102 @@ impl BenchmarkResults {
         Ok(Duration::from_secs_f64(quantile))
     }
 
+    /// Calculate average Time Per Output Token (TPOT) across all successful requests
+    pub fn time_per_output_token_avg(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let tpot_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_per_output_token())
+                .collect();
+
+            if tpot_durations.is_empty() {
+                return Ok(Duration::from_secs(0));
+            }
+
+            Ok(tpot_durations.iter().sum::<Duration>() / tpot_durations.len() as u32)
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate TPOT percentile
+    pub fn time_per_output_token_percentile(&self, percentile: f64) -> anyhow::Result<Duration> {
+        let tpot_durations: Vec<Duration> = self
+            .get_successful_responses()
+            .iter()
+            .filter_map(|response| response.time_per_output_token())
+            .collect();
+
+        if tpot_durations.is_empty() {
+            return Ok(Duration::from_secs(0));
+        }
+
+        let quantile = self.quantile_duration(tpot_durations, percentile)?;
+        Ok(Duration::from_secs_f64(quantile))
+    }
+
+    /// Calculate standard deviation for TTFT
+    pub fn time_to_first_token_std(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let ttft_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_to_first_token())
+                .collect();
+
+            if ttft_durations.len() < 2 {
+                return Ok(Duration::from_secs(0));
+            }
+
+            let mean = self.time_to_first_token_avg()?.as_secs_f64();
+            let variance = ttft_durations
+                .iter()
+                .map(|d| (d.as_secs_f64() - mean).powi(2))
+                .sum::<f64>()
+                / (ttft_durations.len() - 1) as f64;
+
+            Ok(Duration::from_secs_f64(variance.sqrt()))
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate standard deviation for TPOT
+    pub fn time_per_output_token_std(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let tpot_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_per_output_token())
+                .collect();
+
+            if tpot_durations.len() < 2 {
+                return Ok(Duration::from_secs(0));
+            }
+
+            let mean = self.time_per_output_token_avg()?.as_secs_f64();
+            let variance = tpot_durations
+                .iter()
+                .map(|d| (d.as_secs_f64() - mean).powi(2))
+                .sum::<f64>()
+                / (tpot_durations.len() - 1) as f64;
+
+            Ok(Duration::from_secs_f64(variance.sqrt()))
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
     pub fn executor_type(&self) -> ExecutorType {
         self.executor_type.clone()
     }

@@ -68,6 +68,10 @@ pub async fn run_console(
                                 throughput: "0".to_string(),
                                 successful_requests: 0,
                                 failed_requests: 0,
+                                avg_ttft_ms: event.avg_ttft_ms,
+                                avg_tpot_ms: event.avg_tpot_ms,
+                                ttft_std_ms: event.ttft_std_ms,
+                                tpot_std_ms: event.tpot_std_ms,
                             }));
                         }
                         BenchmarkEvent::BenchmarkProgress(event) => {
@@ -79,6 +83,10 @@ pub async fn run_console(
                                 throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
                                 successful_requests,
                                 failed_requests,
+                                avg_ttft_ms: event.avg_ttft_ms,
+                                avg_tpot_ms: event.avg_tpot_ms,
+                                ttft_std_ms: event.ttft_std_ms,
+                                tpot_std_ms: event.tpot_std_ms,
                             }));
                         }
                         BenchmarkEvent::BenchmarkEnd(event) => {
@@ -96,6 +104,10 @@ pub async fn run_console(
                                     throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
                                     successful_requests,
                                     failed_requests,
+                                    avg_ttft_ms: event.avg_ttft_ms,
+                                    avg_tpot_ms: event.avg_tpot_ms,
+                                    ttft_std_ms: event.ttft_std_ms,
+                                    tpot_std_ms: event.tpot_std_ms,
                                 }));
                                 dispatcher.lock().expect("lock").dispatch(Action::AddBenchmarkResults(results));
                             }
@@ -283,7 +295,7 @@ impl Widget for &App {
             .split(main_layout[1]);
         let steps_graph_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(bottom_layout[0]);
         // LOGS
         let logs_title = Line::from("Logs".bold()).centered();
@@ -359,21 +371,36 @@ impl Widget for &App {
                 } else {
                     format!("{:4.0}%", 0).to_string().white()
                 };
+                let ttft_display = match (b.avg_ttft_ms, b.ttft_std_ms) {
+                    (Some(mean), Some(std)) => format!("{:.1} (+/- {:.1})ms", mean, std),
+                    (Some(mean), None) => format!("{:.1}ms", mean),
+                    _ => "N/A".to_string(),
+                };
+                let tpot_display = match (b.avg_tpot_ms, b.tpot_std_ms) {
+                    (Some(mean), Some(std)) => format!("{:.1} (+/- {:.1})ms", mean, std),
+                    (Some(mean), None) => format!("{:.1}ms", mean),
+                    _ => "N/A".to_string(),
+                };
+
                 let cells = vec![
                     b.id.clone().white(),
                     b.status.to_string().white(),
                     format!("{:4.0}%", b.progress).white(),
                     error_rate,
                     format!("{:>6.6} req/sec avg", b.throughput).green().bold(),
+                    format!("{}", ttft_display).cyan(),
+                    format!("{}", tpot_display).magenta(),
                 ];
                 Row::new(cells)
             })
             .collect::<Vec<_>>();
         let widths = [
-            Constraint::Length(30),
+            Constraint::Length(20),
             Constraint::Length(10),
             Constraint::Length(5),
             Constraint::Length(5),
+            Constraint::Length(20),
+            Constraint::Length(20),
             Constraint::Length(20),
         ];
         // steps table
@@ -384,6 +411,8 @@ impl Widget for &App {
                 Cell::new(Line::from("%").alignment(Alignment::Left)),
                 Cell::new(Line::from("Err").alignment(Alignment::Left)),
                 Cell::new(Line::from("Throughput").alignment(Alignment::Left)),
+                Cell::new(Line::from("TTFT").alignment(Alignment::Left)),
+                Cell::new(Line::from("TPOT").alignment(Alignment::Left)),
             ]))
             .block(steps_block)
             .render(steps_graph_layout[0], buf);
@@ -470,6 +499,10 @@ pub(crate) struct BenchmarkUI {
     throughput: String,
     successful_requests: u64,
     failed_requests: u64,
+    avg_ttft_ms: Option<f64>,
+    avg_tpot_ms: Option<f64>,
+    ttft_std_ms: Option<f64>,
+    tpot_std_ms: Option<f64>,
 }
 
 #[derive(Clone, strum_macros::Display)]

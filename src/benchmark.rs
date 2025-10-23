@@ -33,6 +33,10 @@ pub struct BenchmarkEvent {
     pub results: Option<BenchmarkResults>,
     pub successful_requests: u64,
     pub failed_requests: u64,
+    pub avg_ttft_ms: Option<f64>,
+    pub avg_tpot_ms: Option<f64>,
+    pub ttft_std_ms: Option<f64>,
+    pub tpot_std_ms: Option<f64>,
 }
 
 pub enum Event {
@@ -207,6 +211,10 @@ impl Benchmark {
                             successful_requests: progress_evt.progress.successful_requests,
                             failed_requests: progress_evt.progress.failed_requests,
                             results: None,
+                            avg_ttft_ms: progress_evt.progress.avg_ttft_ms,
+                            avg_tpot_ms: progress_evt.progress.avg_tpot_ms,
+                            ttft_std_ms: progress_evt.progress.ttft_std_ms,
+                            tpot_std_ms: progress_evt.progress.tpot_std_ms,
                         }));
                     }
                 }
@@ -229,6 +237,10 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
         }))?;
 
         // create progress handler
@@ -265,6 +277,22 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
         }))?;
         Ok(())
     }
@@ -283,6 +311,10 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
         }))?;
 
         // create progress handler
@@ -319,6 +351,22 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
         }))?;
         Ok(())
     }
@@ -373,6 +421,10 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
         }))?;
 
         // create progress handler
@@ -408,6 +460,22 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
         }))?;
         Ok(())
     }

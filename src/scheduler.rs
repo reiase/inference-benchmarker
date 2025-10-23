@@ -31,6 +31,10 @@ pub struct SchedulerProgress {
     pub requests_throughput: f64,
     pub successful_requests: u64,
     pub failed_requests: u64,
+    pub avg_ttft_ms: Option<f64>,
+    pub avg_tpot_ms: Option<f64>,
+    pub ttft_std_ms: Option<f64>,
+    pub tpot_std_ms: Option<f64>,
 }
 
 impl Scheduler {
@@ -119,11 +123,21 @@ impl Scheduler {
                         result.add_response(response);
                         let expected_duration = result.executor_config().duration.as_secs_f64();
                         let start_time = result.start_time().unwrap_or(tokio::time::Instant::now());
+                        // Calculate real-time TTFT and TPOT with standard deviation
+                        let avg_ttft_ms = result.time_to_first_token_avg().ok().map(|d| d.as_millis() as f64);
+                        let avg_tpot_ms = result.time_per_output_token_avg().ok().map(|d| d.as_millis() as f64);
+                        let ttft_std_ms = result.time_to_first_token_std().ok().map(|d| d.as_millis() as f64);
+                        let tpot_std_ms = result.time_per_output_token_std().ok().map(|d| d.as_millis() as f64);
+
                         let _ = progress_tx.send(Some(SchedulerProgress {
                             progress: (100.0 * (1.0 - (expected_duration - start_time.elapsed().as_secs_f64()) / expected_duration)).min(100.0),
                             requests_throughput: result.successful_request_rate().unwrap_or_default(),
                             successful_requests: result.successful_requests() as u64,
                             failed_requests: result.failed_requests() as u64,
+                            avg_ttft_ms,
+                            avg_tpot_ms,
+                            ttft_std_ms,
+                            tpot_std_ms,
                         })).await;
                     }
                 }=>{}
