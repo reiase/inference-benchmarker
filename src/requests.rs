@@ -266,6 +266,12 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                 }
             };
         }
+
+        // Ensure the response is marked as ended if it has an end_time
+        if aggregated_response.end_time.is_some() {
+            aggregated_response.ended = true;
+        }
+
         sender
             .send(aggregated_response.clone())
             .await

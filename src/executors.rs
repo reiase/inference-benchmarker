@@ -31,6 +31,8 @@ pub trait Executor {
         requests: Arc<Mutex<dyn TextRequestGenerator + Send>>,
         responses_tx: UnboundedSender<TextGenerationAggregatedResponse>,
         stop_sender: broadcast::Sender<()>,
+        sent_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
+        in_flight_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
     );
 }
 
@@ -63,6 +65,8 @@ impl Executor for ConstantVUsExecutor {
         requests: Arc<Mutex<dyn TextRequestGenerator + Send>>,
         responses_tx: UnboundedSender<TextGenerationAggregatedResponse>,
         stop_sender: broadcast::Sender<()>,
+        sent_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
+        in_flight_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) {
         let start = std::time::Instant::now();
         // channel to handle ending VUs
@@ -80,6 +84,8 @@ impl Executor for ConstantVUsExecutor {
                 responses_tx.clone(),
                 end_tx.clone(),
                 stop_sender.clone(),
+                sent_requests.clone(),
+                in_flight_requests.clone(),
             )
             .await;
             active_vus.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -105,7 +111,7 @@ impl Executor for ConstantVUsExecutor {
                         let request = Arc::from(requests_guard.generate_request());
                         drop(requests_guard);
                         active_vus.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        start_vu(self.backend.clone(), request, responses_tx.clone(), end_tx.clone(), stop_sender.clone()).await;
+                        start_vu(self.backend.clone(), request, responses_tx.clone(), end_tx.clone(), stop_sender.clone(), sent_requests.clone(), in_flight_requests.clone()).await;
                     }
                 }
             }=>{}
@@ -119,6 +125,8 @@ async fn start_vu(
     responses_tx: UnboundedSender<TextGenerationAggregatedResponse>,
     end_tx: Sender<bool>,
     stop_sender: broadcast::Sender<()>,
+    sent_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
+    in_flight_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
 ) -> JoinHandle<()> {
     let mut stop_receiver = stop_sender.subscribe();
     tokio::spawn(async move {
@@ -129,6 +137,15 @@ async fn start_vu(
             _ = async{
                 let (tx, mut rx): (Sender<TextGenerationAggregatedResponse>, Receiver<TextGenerationAggregatedResponse>) = tokio::sync::mpsc::channel(1);
                 trace!("VU started with request: {:?}", request);
+
+                // Track request sent if tracking is enabled
+                if let Some(sent_requests) = &sent_requests {
+                    sent_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                if let Some(in_flight_requests) = &in_flight_requests {
+                    in_flight_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+
                 let req_thread = tokio::spawn(async move {
                     backend.generate(request.clone(), tx).await;
                 });
@@ -178,6 +195,8 @@ impl Executor for ConstantArrivalRateExecutor {
         requests: Arc<Mutex<dyn TextRequestGenerator + Send>>,
         responses_tx: UnboundedSender<TextGenerationAggregatedResponse>,
         stop_sender: broadcast::Sender<()>,
+        sent_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
+        in_flight_requests: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) {
         let start = std::time::Instant::now();
         let active_vus = Arc::new(AtomicI64::new(0));
@@ -213,7 +232,7 @@ impl Executor for ConstantArrivalRateExecutor {
                             if active_vus_thread.load(std::sync::atomic::Ordering::SeqCst) < max_vus as i64 {
                                 let mut requests_guard = requests.lock().await;
                                 let request = Arc::from(requests_guard.generate_request());
-                                start_vu(backend.clone(), request.clone(), responses_tx.clone(), end_tx.clone(),stop_sender.clone()).await;
+                                start_vu(backend.clone(), request.clone(), responses_tx.clone(), end_tx.clone(),stop_sender.clone(), sent_requests.clone(), in_flight_requests.clone()).await;
                                 active_vus_thread.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                             } else {
                                 warn!("Max VUs reached, skipping request");

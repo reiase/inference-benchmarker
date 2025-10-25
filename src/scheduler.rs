@@ -35,6 +35,12 @@ pub struct SchedulerProgress {
     pub avg_tpot_ms: Option<f64>,
     pub ttft_std_ms: Option<f64>,
     pub tpot_std_ms: Option<f64>,
+    pub input_throughput: Option<f64>,
+    pub output_throughput: Option<f64>,
+    pub total_throughput: Option<f64>,
+    pub sent_requests: u64,
+    pub in_flight_requests: u64,
+    pub completed_requests: u64,
 }
 
 impl Scheduler {
@@ -101,7 +107,17 @@ impl Scheduler {
         let progress_tx = self.progress_tx.clone();
         let mut stop_receiver = self.stop_sender.subscribe();
         let req_gen = self.requests_generator.clone();
-        tokio::spawn(async move {
+
+        // Request status tracking
+        let sent_requests = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let in_flight_requests = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let completed_requests = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        // Clone for the executor
+        let sent_requests_for_executor = sent_requests.clone();
+        let in_flight_requests_for_executor = in_flight_requests.clone();
+
+        let response_handler = tokio::spawn(async move {
             tokio::select! {
                 _ = stop_receiver.recv() => {
                     debug!("Received stop signal, stopping benchmark");
@@ -116,9 +132,7 @@ impl Scheduler {
                         let result = results.clone();
                         let progress_tx = progress_tx.clone();
                         trace!("Received response: {:?}", response);
-                        if response.ended {
-                            return;
-                        }
+                        let response_ended = response.ended;
                         let mut result = result.lock().await;
                         result.add_response(response);
                         let expected_duration = result.executor_config().duration.as_secs_f64();
@@ -128,7 +142,22 @@ impl Scheduler {
                         let avg_tpot_ms = result.time_per_output_token_avg().ok().map(|d| d.as_millis() as f64);
                         let ttft_std_ms = result.time_to_first_token_std().ok().map(|d| d.as_millis() as f64);
                         let tpot_std_ms = result.time_per_output_token_std().ok().map(|d| d.as_millis() as f64);
-
+                        
+                        // Calculate throughput metrics
+                        let input_throughput = result.input_token_throughput_secs().ok();
+                        let output_throughput = result.output_token_throughput_secs().ok();
+                        let total_throughput = result.total_token_throughput_secs().ok();
+                        
+                        // Update request status - only count as completed if the response has ended
+                        if response_ended {
+                            completed_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            in_flight_requests.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        
+                        let current_sent = sent_requests.load(std::sync::atomic::Ordering::SeqCst);
+                        let current_in_flight = in_flight_requests.load(std::sync::atomic::Ordering::SeqCst);
+                        let current_completed = completed_requests.load(std::sync::atomic::Ordering::SeqCst);
+                        
                         let _ = progress_tx.send(Some(SchedulerProgress {
                             progress: (100.0 * (1.0 - (expected_duration - start_time.elapsed().as_secs_f64()) / expected_duration)).min(100.0),
                             requests_throughput: result.successful_request_rate().unwrap_or_default(),
@@ -138,6 +167,12 @@ impl Scheduler {
                             avg_tpot_ms,
                             ttft_std_ms,
                             tpot_std_ms,
+                            input_throughput,
+                            output_throughput,
+                            total_throughput,
+                            sent_requests: current_sent,
+                            in_flight_requests: current_in_flight,
+                            completed_requests: current_completed,
                         })).await;
                     }
                 }=>{}
@@ -150,8 +185,14 @@ impl Scheduler {
                 self.requests_generator.clone(),
                 tx,
                 self.stop_sender.clone(),
+                Some(sent_requests_for_executor),
+                Some(in_flight_requests_for_executor),
             )
             .await;
+        
+        // Wait for the response handler to finish processing all responses
+        let _ = response_handler.await;
+        
         warn!("{:?}", self.results.clone());
         if self.results.lock().await.successful_requests() == 0 {
             Err(anyhow::anyhow!(NoResponses))
@@ -162,6 +203,16 @@ impl Scheduler {
 
     pub fn get_results(&self) -> Arc<Mutex<BenchmarkResults>> {
         self.results.clone()
+    }
+
+    pub async fn get_final_request_status(&self) -> (u64, u64, u64) {
+        // This method would need to be implemented to return the final status
+        // For now, we'll use the results to calculate the final status
+        let results = self.results.lock().await;
+        let successful = results.successful_requests() as u64;
+        let failed = results.failed_requests() as u64;
+        let total = successful + failed;
+        (total, 0, total) // (sent, in_flight, completed)
     }
 }
 

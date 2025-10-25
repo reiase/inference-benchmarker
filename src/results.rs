@@ -80,9 +80,91 @@ impl BenchmarkResults {
     }
 
     pub fn token_throughput_secs(&self) -> anyhow::Result<f64> {
-        if self.is_ready() {
+        if self.start_time().is_some() {
             let total_tokens: u64 = self.total_tokens();
-            Ok(total_tokens as f64 / self.duration().unwrap_or_default().as_secs_f64())
+            let duration = self.duration().unwrap_or_default();
+            if duration.as_secs_f64() > 0.0 {
+                Ok(total_tokens as f64 / duration.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate input token throughput (tokens per second)
+    /// Input throughput measures how fast input tokens are processed from request start to first token output
+    pub fn input_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_input_tokens = self.total_prompt_tokens();
+
+            // Calculate total time from request start to first token across all requests
+            let total_input_processing_time: Duration = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_to_first_token())
+                .sum();
+
+            if total_input_processing_time.as_secs_f64() > 0.0 {
+                Ok(total_input_tokens as f64 / total_input_processing_time.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate output token throughput (tokens per second)
+    /// Output throughput measures how fast output tokens are generated from first token to response end
+    pub fn output_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_output_tokens = self.total_tokens();
+
+            // Calculate total time from first token to response end across all requests
+            let total_output_generation_time: Duration = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| {
+                    response.time_to_first_token().and_then(|ttft| {
+                        response.end_time.map(|end| {
+                            // Time from first token to response end
+                            if let Some(start) = response.start_time {
+                                end.duration_since(start + ttft)
+                            } else {
+                                Duration::from_secs(0)
+                            }
+                        })
+                    })
+                })
+                .sum();
+
+            if total_output_generation_time.as_secs_f64() > 0.0 {
+                Ok(total_output_tokens as f64 / total_output_generation_time.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate total token throughput (input + output tokens per second)
+    /// Total throughput measures overall token processing rate from request start to response end
+    pub fn total_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_input_tokens = self.total_prompt_tokens();
+            let total_output_tokens = self.total_tokens();
+            let total_tokens = total_input_tokens + total_output_tokens;
+
+            // Use the total duration from start to end of all requests
+            let duration = self.duration().unwrap_or_default();
+            if duration.as_secs_f64() > 0.0 {
+                Ok(total_tokens as f64 / duration.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
         } else {
             Err(anyhow::anyhow!(NoResponses))
         }
@@ -91,14 +173,14 @@ impl BenchmarkResults {
     pub fn total_tokens_sent(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().unwrap().num_prompt_tokens)
+            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
             .sum()
     }
 
     pub fn total_prompt_tokens(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().unwrap().num_prompt_tokens)
+            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
             .sum()
     }
 
