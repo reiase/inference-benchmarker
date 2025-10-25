@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
+// Removed unused import
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-pub use crate::app::run_console;
+pub use crate::console::run_console;
 pub use crate::benchmark::{BenchmarkConfig, BenchmarkKind};
 use crate::benchmark::{Event, MessageEvent};
 pub use crate::profiles::apply_profile;
 use crate::requests::OpenAITextGenerationBackend;
 pub use crate::requests::TokenizeOptions;
 use chrono::Local;
-use crossterm::ExecutableCommand;
+// Removed crossterm dependency
 use log::{debug, error, info, warn, Level, LevelFilter};
 use reqwest::Url;
 use tokenizers::{FromPretrainedParameters, Tokenizer};
@@ -20,11 +20,9 @@ use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
 use writers::BenchmarkReportWriter;
 
-mod app;
+mod console;
 mod benchmark;
-mod event;
 mod executors;
-mod flux;
 mod profiles;
 mod requests;
 mod results;
@@ -43,7 +41,6 @@ pub struct RunConfiguration {
     pub num_rates: u64,
     pub benchmark_kind: String,
     pub warmup_duration: std::time::Duration,
-    pub interactive: bool,
     pub prompt_options: Option<TokenizeOptions>,
     pub decode_options: Option<TokenizeOptions>,
     pub dataset: String,
@@ -115,27 +112,23 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
     };
     config.validate()?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    if run_config.interactive {
-        // send logs to file
-        let target = Box::new(File::create("log.txt").expect("Can't create file"));
-        env_logger::Builder::new()
-            .target(env_logger::Target::Pipe(target))
-            .filter(Some("inference_benchmarker"), LevelFilter::Debug)
-            .format(|buf, record| {
-                writeln!(
-                    buf,
-                    "[{} {} {}:{}] {}",
-                    Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                    record.level(),
-                    record.file().unwrap_or("unknown"),
-                    record.line().unwrap_or(0),
-                    record.args()
-                )
-            })
-            .init();
-    } else {
-        env_logger::init();
-    }
+    // Always use console interface, send logs to file for debugging
+    let target = Box::new(File::create("log.txt").expect("Can't create file"));
+    env_logger::Builder::new()
+        .target(env_logger::Target::Pipe(target))
+        .filter(Some("inference_benchmarker"), LevelFilter::Debug)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {} {}:{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.args()
+            )
+        })
+        .init();
     let config_clone = config.clone();
     let mut stop_receiver = stop_sender.subscribe();
     let stop_sender_clone = stop_sender.clone();
@@ -145,12 +138,7 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
                 debug!("Received stop signal, stopping benchmark");
             }
             _ = async{
-                if run_config.interactive {
-                    run_console(config_clone, rx, stop_sender_clone).await;
-                } else {
-                    // consume the channel to avoid closed channel error
-                    while rx.recv().await.is_some() {}
-                }
+                run_console(config_clone, rx, stop_sender_clone).await;
             } => {}
         }
     });
@@ -207,16 +195,10 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
         }
     }
     info!("Benchmark finished");
-    if !run_config.interactive {
-        // quit app if not interactive
-        let _ = stop_sender.send(());
-    }
+    // Always keep the console interface running
     ui_thread.await?;
 
-    // Revert terminal to original view
-    io::stdout().execute(ratatui::crossterm::terminal::LeaveAlternateScreen)?;
-    ratatui::crossterm::terminal::disable_raw_mode()?;
-    io::stdout().execute(ratatui::crossterm::cursor::Show)?;
+    // No need to revert terminal since we're not using TUI anymore
 
     let report = benchmark.get_report();
     match BenchmarkReportWriter::try_new(config.clone(), report) {

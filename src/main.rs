@@ -51,9 +51,6 @@ struct Args {
     #[clap(default_value = "", short, long, env)]
     api_key: String,
 
-    /// Disable console UI
-    #[clap(short, long, env)]
-    no_console: bool,
     /// Constraints for prompt length.
     /// No value means use the input prompt as defined in input dataset.
     /// We sample the number of tokens to generate from a normal distribution.
@@ -217,7 +214,6 @@ async fn main() {
         num_rates: args.num_rates,
         benchmark_kind: args.benchmark_kind.clone(),
         warmup_duration: args.warmup,
-        interactive: !args.no_console,
         prompt_options: args.prompt_options.clone(),
         decode_options: args.decode_options.clone(),
         dataset: args.dataset.clone(),

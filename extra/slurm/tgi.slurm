@@ -71,7 +71,6 @@ if [[ $exit_code != 124 ]]; then
              --extra-meta "version=$VERSION,engine=TGI,tp=$TP" \
              --decode-options "num_tokens=800,max_tokens=800,min_tokens=50,variance=100" \
              --dataset-file share_gpt_turns.json \
-             --no-console
 fi
 
 # stop TGI

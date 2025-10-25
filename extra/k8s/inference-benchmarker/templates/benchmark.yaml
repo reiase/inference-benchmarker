@@ -50,7 +50,6 @@ spec:
             - "http://{{ include "inference-benchmarker.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:8080"
             - "--tokenizer-name"
             - "{{ .Values.model_id }}"
-            - "--no-console"
             {{- toYaml .Values.benchmark.extra_args | nindent 12 }}
           env:
             - name: HF_TOKEN
