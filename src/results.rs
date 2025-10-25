@@ -80,9 +80,91 @@ impl BenchmarkResults {
     }
 
     pub fn token_throughput_secs(&self) -> anyhow::Result<f64> {
-        if self.is_ready() {
+        if self.start_time().is_some() {
             let total_tokens: u64 = self.total_tokens();
-            Ok(total_tokens as f64 / self.duration().unwrap_or_default().as_secs_f64())
+            let duration = self.duration().unwrap_or_default();
+            if duration.as_secs_f64() > 0.0 {
+                Ok(total_tokens as f64 / duration.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate input token throughput (tokens per second)
+    /// Input throughput measures how fast input tokens are processed from request start to first token output
+    pub fn input_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_input_tokens = self.total_prompt_tokens();
+
+            // Calculate total time from request start to first token across all requests
+            let total_input_processing_time: Duration = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_to_first_token())
+                .sum();
+
+            if total_input_processing_time.as_secs_f64() > 0.0 {
+                Ok(total_input_tokens as f64 / total_input_processing_time.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate output token throughput (tokens per second)
+    /// Output throughput measures how fast output tokens are generated from first token to response end
+    pub fn output_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_output_tokens = self.total_tokens();
+
+            // Calculate total time from first token to response end across all requests
+            let total_output_generation_time: Duration = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| {
+                    response.time_to_first_token().and_then(|ttft| {
+                        response.end_time.map(|end| {
+                            // Time from first token to response end
+                            if let Some(start) = response.start_time {
+                                end.duration_since(start + ttft)
+                            } else {
+                                Duration::from_secs(0)
+                            }
+                        })
+                    })
+                })
+                .sum();
+
+            if total_output_generation_time.as_secs_f64() > 0.0 {
+                Ok(total_output_tokens as f64 / total_output_generation_time.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate total token throughput (input + output tokens per second)
+    /// Total throughput measures overall token processing rate from request start to response end
+    pub fn total_token_throughput_secs(&self) -> anyhow::Result<f64> {
+        if self.start_time().is_some() {
+            let total_input_tokens = self.total_prompt_tokens();
+            let total_output_tokens = self.total_tokens();
+            let total_tokens = total_input_tokens + total_output_tokens;
+
+            // Use the total duration from start to end of all requests
+            let duration = self.duration().unwrap_or_default();
+            if duration.as_secs_f64() > 0.0 {
+                Ok(total_tokens as f64 / duration.as_secs_f64())
+            } else {
+                Ok(0.0)
+            }
         } else {
             Err(anyhow::anyhow!(NoResponses))
         }
@@ -91,14 +173,14 @@ impl BenchmarkResults {
     pub fn total_tokens_sent(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().unwrap().num_prompt_tokens)
+            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
             .sum()
     }
 
     pub fn total_prompt_tokens(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().unwrap().num_prompt_tokens)
+            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
             .sum()
     }
 
@@ -217,6 +299,102 @@ impl BenchmarkResults {
             percentile,
         )?;
         Ok(Duration::from_secs_f64(quantile))
+    }
+
+    /// Calculate average Time Per Output Token (TPOT) across all successful requests
+    pub fn time_per_output_token_avg(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let tpot_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_per_output_token())
+                .collect();
+
+            if tpot_durations.is_empty() {
+                return Ok(Duration::from_secs(0));
+            }
+
+            Ok(tpot_durations.iter().sum::<Duration>() / tpot_durations.len() as u32)
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate TPOT percentile
+    pub fn time_per_output_token_percentile(&self, percentile: f64) -> anyhow::Result<Duration> {
+        let tpot_durations: Vec<Duration> = self
+            .get_successful_responses()
+            .iter()
+            .filter_map(|response| response.time_per_output_token())
+            .collect();
+
+        if tpot_durations.is_empty() {
+            return Ok(Duration::from_secs(0));
+        }
+
+        let quantile = self.quantile_duration(tpot_durations, percentile)?;
+        Ok(Duration::from_secs_f64(quantile))
+    }
+
+    /// Calculate standard deviation for TTFT
+    pub fn time_to_first_token_std(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let ttft_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_to_first_token())
+                .collect();
+
+            if ttft_durations.len() < 2 {
+                return Ok(Duration::from_secs(0));
+            }
+
+            let mean = self.time_to_first_token_avg()?.as_secs_f64();
+            let variance = ttft_durations
+                .iter()
+                .map(|d| (d.as_secs_f64() - mean).powi(2))
+                .sum::<f64>()
+                / (ttft_durations.len() - 1) as f64;
+
+            Ok(Duration::from_secs_f64(variance.sqrt()))
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
+    }
+
+    /// Calculate standard deviation for TPOT
+    pub fn time_per_output_token_std(&self) -> anyhow::Result<std::time::Duration> {
+        if self.is_ready() {
+            if self.successful_requests() == 0 {
+                return Ok(Duration::from_secs(0));
+            }
+            let tpot_durations: Vec<Duration> = self
+                .get_successful_responses()
+                .iter()
+                .filter_map(|response| response.time_per_output_token())
+                .collect();
+
+            if tpot_durations.len() < 2 {
+                return Ok(Duration::from_secs(0));
+            }
+
+            let mean = self.time_per_output_token_avg()?.as_secs_f64();
+            let variance = tpot_durations
+                .iter()
+                .map(|d| (d.as_secs_f64() - mean).powi(2))
+                .sum::<f64>()
+                / (tpot_durations.len() - 1) as f64;
+
+            Ok(Duration::from_secs_f64(variance.sqrt()))
+        } else {
+            Err(anyhow::anyhow!(NoResponses))
+        }
     }
 
     pub fn executor_type(&self) -> ExecutorType {

@@ -68,6 +68,16 @@ pub async fn run_console(
                                 throughput: "0".to_string(),
                                 successful_requests: 0,
                                 failed_requests: 0,
+                                avg_ttft_ms: event.avg_ttft_ms,
+                                avg_tpot_ms: event.avg_tpot_ms,
+                                ttft_std_ms: event.ttft_std_ms,
+                                tpot_std_ms: event.tpot_std_ms,
+                                input_throughput: event.input_throughput,
+                                output_throughput: event.output_throughput,
+                                total_throughput: event.total_throughput,
+                                sent_requests: event.sent_requests,
+                                in_flight_requests: event.in_flight_requests,
+                                completed_requests: event.completed_requests,
                             }));
                         }
                         BenchmarkEvent::BenchmarkProgress(event) => {
@@ -79,6 +89,16 @@ pub async fn run_console(
                                 throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
                                 successful_requests,
                                 failed_requests,
+                                avg_ttft_ms: event.avg_ttft_ms,
+                                avg_tpot_ms: event.avg_tpot_ms,
+                                ttft_std_ms: event.ttft_std_ms,
+                                tpot_std_ms: event.tpot_std_ms,
+                                input_throughput: event.input_throughput,
+                                output_throughput: event.output_throughput,
+                                total_throughput: event.total_throughput,
+                                sent_requests: event.sent_requests,
+                                in_flight_requests: event.in_flight_requests,
+                                completed_requests: event.completed_requests,
                             }));
                         }
                         BenchmarkEvent::BenchmarkEnd(event) => {
@@ -96,6 +116,16 @@ pub async fn run_console(
                                     throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
                                     successful_requests,
                                     failed_requests,
+                                    avg_ttft_ms: event.avg_ttft_ms,
+                                    avg_tpot_ms: event.avg_tpot_ms,
+                                    ttft_std_ms: event.ttft_std_ms,
+                                    tpot_std_ms: event.tpot_std_ms,
+                                    input_throughput: event.input_throughput,
+                                    output_throughput: event.output_throughput,
+                                    total_throughput: event.total_throughput,
+                                    sent_requests: event.sent_requests,
+                                    in_flight_requests: event.in_flight_requests,
+                                    completed_requests: event.completed_requests,
                                 }));
                                 dispatcher.lock().expect("lock").dispatch(Action::AddBenchmarkResults(results));
                             }
@@ -281,10 +311,21 @@ impl Widget for &App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(main_layout[1]);
-        let steps_graph_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-            .split(bottom_layout[0]);
+        // Check if we have chart data to display
+        let has_chart_data = !data.get("token_throughput_rate").unwrap().is_empty();
+
+        let steps_graph_layout = if has_chart_data {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(bottom_layout[0])
+        } else {
+            // If no chart data, give full width to benchmark table
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(100)])
+                .split(bottom_layout[0])
+        };
         // LOGS
         let logs_title = Line::from("Logs".bold()).centered();
         let logs_block = Block::bordered()
@@ -359,24 +400,70 @@ impl Widget for &App {
                 } else {
                     format!("{:4.0}%", 0).to_string().white()
                 };
+                let ttft_display = match (b.avg_ttft_ms, b.ttft_std_ms) {
+                    (Some(mean), Some(std)) => format!("{:.1} (+/- {:.1})ms", mean, std),
+                    (Some(mean), None) => format!("{:.1}ms", mean),
+                    _ => "N/A".to_string(),
+                };
+                let tpot_display = match (b.avg_tpot_ms, b.tpot_std_ms) {
+                    (Some(mean), Some(std)) => format!("{:.1} (+/- {:.1})ms", mean, std),
+                    (Some(mean), None) => format!("{:.1}ms", mean),
+                    _ => "N/A".to_string(),
+                };
+
+                // Format throughput metrics
+                let input_throughput_display = b
+                    .input_throughput
+                    .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+                let output_throughput_display = b
+                    .output_throughput
+                    .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+                let total_throughput_display = b
+                    .total_throughput
+                    .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+
+                // Format request status
+                let request_status = format!(
+                    "{} | {} | {}",
+                    b.sent_requests, b.in_flight_requests, b.completed_requests
+                );
+
                 let cells = vec![
                     b.id.clone().white(),
                     b.status.to_string().white(),
                     format!("{:4.0}%", b.progress).white(),
                     error_rate,
                     format!("{:>6.6} req/sec avg", b.throughput).green().bold(),
+                    format!("{}", ttft_display).cyan(),
+                    format!("{}", tpot_display).magenta(),
+                    format!("In: {}", input_throughput_display).blue(),
+                    format!("Out: {}", output_throughput_display).yellow(),
+                    format!("Total: {}", total_throughput_display).red(),
+                    request_status.white(),
                 ];
                 Row::new(cells)
             })
             .collect::<Vec<_>>();
         let widths = [
-            Constraint::Length(30),
+            Constraint::Length(16),
+            Constraint::Length(8),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(14),
+            Constraint::Length(16),
+            Constraint::Length(16),
             Constraint::Length(10),
-            Constraint::Length(5),
-            Constraint::Length(5),
-            Constraint::Length(20),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(30),
         ];
-        // steps table
+        // steps table - render in appropriate area based on chart data
+        let table_area = if has_chart_data {
+            steps_graph_layout[0] // Left side when chart is shown
+        } else {
+            steps_graph_layout[0] // Full width when no chart
+        };
+
         Table::new(step_rows, widths)
             .header(Row::new(vec![
                 Cell::new(Line::from("Bench").alignment(Alignment::Left)),
@@ -384,39 +471,49 @@ impl Widget for &App {
                 Cell::new(Line::from("%").alignment(Alignment::Left)),
                 Cell::new(Line::from("Err").alignment(Alignment::Left)),
                 Cell::new(Line::from("Throughput").alignment(Alignment::Left)),
+                Cell::new(Line::from("TTFT").alignment(Alignment::Left)),
+                Cell::new(Line::from("TPOT").alignment(Alignment::Left)),
+                Cell::new(Line::from("Input").alignment(Alignment::Left)),
+                Cell::new(Line::from("Output").alignment(Alignment::Left)),
+                Cell::new(Line::from("Total").alignment(Alignment::Left)),
+                Cell::new(
+                    Line::from("Requests(Send|In-Flight|Done)").alignment(Alignment::Left),
+                ),
             ]))
             .block(steps_block)
-            .render(steps_graph_layout[0], buf);
+            .render(table_area, buf);
 
-        // CHARTS
-        let graphs_block_title = Line::from("Token throughput rate".bold()).centered();
-        let graphs_block = Block::bordered()
-            .title(graphs_block_title.alignment(Alignment::Center))
-            .border_set(border::THICK);
-        let binding = data.get("token_throughput_rate").unwrap().clone();
-        let datasets = vec![Dataset::default()
-            .name("Token throughput rate".to_string())
-            .marker(symbols::Marker::Dot)
-            .graph_type(ratatui::widgets::GraphType::Scatter)
-            .style(ratatui::style::Style::default().fg(ratatui::style::Color::LightMagenta))
-            .data(&binding)];
-        let (xmax, ymax) = get_max_bounds(&binding, (10.0, 100.0));
-        let x_axis = ratatui::widgets::Axis::default()
-            .title("Arrival rate (req/s)".to_string())
-            .style(ratatui::style::Style::default().white())
-            .bounds([0.0, xmax])
-            .labels(get_axis_labels(0.0, xmax, 5));
-        let y_axis = ratatui::widgets::Axis::default()
-            .title("Throughput (tokens/s)".to_string())
-            .style(ratatui::style::Style::default().white())
-            .bounds([0.0, ymax])
-            .labels(get_axis_labels(0.0, ymax, 5));
-        ratatui::widgets::Chart::new(datasets)
-            .x_axis(x_axis)
-            .y_axis(y_axis)
-            .block(graphs_block)
-            .legend_position(None)
-            .render(steps_graph_layout[1], buf);
+        // CHARTS - only render if we have chart data
+        if has_chart_data {
+            let graphs_block_title = Line::from("Token throughput rate".bold()).centered();
+            let graphs_block = Block::bordered()
+                .title(graphs_block_title.alignment(Alignment::Center))
+                .border_set(border::THICK);
+            let binding = data.get("token_throughput_rate").unwrap().clone();
+            let datasets = vec![Dataset::default()
+                .name("Token throughput rate".to_string())
+                .marker(symbols::Marker::Dot)
+                .graph_type(ratatui::widgets::GraphType::Scatter)
+                .style(ratatui::style::Style::default().fg(ratatui::style::Color::LightMagenta))
+                .data(&binding)];
+            let (xmax, ymax) = get_max_bounds(&binding, (10.0, 100.0));
+            let x_axis = ratatui::widgets::Axis::default()
+                .title("Arrival rate (req/s)".to_string())
+                .style(ratatui::style::Style::default().white())
+                .bounds([0.0, xmax])
+                .labels(get_axis_labels(0.0, xmax, 5));
+            let y_axis = ratatui::widgets::Axis::default()
+                .title("Throughput (tokens/s)".to_string())
+                .style(ratatui::style::Style::default().white())
+                .bounds([0.0, ymax])
+                .labels(get_axis_labels(0.0, ymax, 5));
+            ratatui::widgets::Chart::new(datasets)
+                .x_axis(x_axis)
+                .y_axis(y_axis)
+                .block(graphs_block)
+                .legend_position(None)
+                .render(steps_graph_layout[1], buf);
+        }
     }
 }
 
@@ -470,6 +567,16 @@ pub(crate) struct BenchmarkUI {
     throughput: String,
     successful_requests: u64,
     failed_requests: u64,
+    avg_ttft_ms: Option<f64>,
+    avg_tpot_ms: Option<f64>,
+    ttft_std_ms: Option<f64>,
+    tpot_std_ms: Option<f64>,
+    input_throughput: Option<f64>,
+    output_throughput: Option<f64>,
+    total_throughput: Option<f64>,
+    sent_requests: u64,
+    in_flight_requests: u64,
+    completed_requests: u64,
 }
 
 #[derive(Clone, strum_macros::Display)]

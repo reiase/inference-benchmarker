@@ -194,14 +194,28 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                         // skip empty responses
                         continue;
                     }
-                    // we need to count the number of tokens generated as each delta chunk may contain multiple tokens
-                    // that's the case with vLLM chunked prefill or speculative decoding
+                    // Count tokens in the current content delta
+                    // Note: Each SSE message contains a content delta that may be:
+                    // 1. A single token (most common)
+                    // 2. Multiple tokens (vLLM chunked prefill or speculative decoding)
+                    // 3. Part of a token (rare, but possible with streaming)
                     let num_tokens =
                         self.tokenizer.encode(content.clone(), false).unwrap().len() as u64;
+
+                    // Log when we receive multiple tokens in one delta
                     if num_tokens > 1 {
+                        debug!(
+                            "Received {num_tokens} tokens in one delta: '{content}'",
+                            num_tokens = num_tokens,
+                            content = content
+                        );
+                    }
+
+                    // Additional validation: check if content makes sense
+                    if content.len() > 0 && num_tokens == 0 {
                         warn!(
-                            "Generated more than one token: {num_tokens}",
-                            num_tokens = num_tokens
+                            "Tokenizer returned 0 tokens for non-empty content: '{content}'",
+                            content = content
                         );
                     }
                     match choices[0].clone().finish_reason {
@@ -252,6 +266,12 @@ impl TextGenerationBackend for OpenAITextGenerationBackend {
                 }
             };
         }
+
+        // Ensure the response is marked as ended if it has an end_time
+        if aggregated_response.end_time.is_some() {
+            aggregated_response.ended = true;
+        }
+
         sender
             .send(aggregated_response.clone())
             .await
@@ -721,6 +741,7 @@ pub struct TextGenerationAggregatedResponse {
     pub end_time: Option<tokio::time::Instant>,
     pub num_generated_tokens: u64,
     pub times_to_tokens: Vec<time::Duration>,
+    pub token_arrival_times: Vec<tokio::time::Instant>,
     last_received_token_time: tokio::time::Instant,
     pub failed: bool,
     pub ended: bool,
@@ -735,6 +756,7 @@ impl TextGenerationAggregatedResponse {
             end_time: None,
             num_generated_tokens: 0,
             times_to_tokens: Vec::new(),
+            token_arrival_times: Vec::new(),
             last_received_token_time: tokio::time::Instant::now(),
             failed: false,
             ended: false,
@@ -749,6 +771,7 @@ impl TextGenerationAggregatedResponse {
             end_time: None,
             num_generated_tokens: 0,
             times_to_tokens: Vec::new(),
+            token_arrival_times: Vec::new(),
             last_received_token_time: tokio::time::Instant::now(),
             failed: false,
             ended: true,
@@ -772,11 +795,33 @@ impl TextGenerationAggregatedResponse {
 
     fn add_tokens(&mut self, num_tokens: u64) {
         self.num_generated_tokens += num_tokens;
-        let time_to_generate = self.last_received_token_time.elapsed();
-        // make the assumption that when returned simultaneously, tokens were generated at a constant rate
-        time_to_generate.checked_div(num_tokens as u32).unwrap();
-        self.last_received_token_time = tokio::time::Instant::now();
-        self.times_to_tokens.push(time_to_generate);
+        let current_time = tokio::time::Instant::now();
+        let time_since_last_batch = self.last_received_token_time.elapsed();
+
+        // More accurate token timing: distribute time across tokens in this batch
+        if num_tokens > 0 {
+            let time_per_token = if num_tokens == 1 {
+                time_since_last_batch
+            } else {
+                // For multiple tokens, assume they were generated sequentially
+                // with equal time intervals between them
+                time_since_last_batch / num_tokens as u32
+            };
+
+            // Record arrival time for each token with distributed timing
+            for i in 0..num_tokens {
+                let token_arrival_time = if i == 0 {
+                    current_time
+                } else {
+                    // Simulate sequential token generation
+                    current_time - time_per_token * (num_tokens - i - 1) as u32
+                };
+                self.token_arrival_times.push(token_arrival_time);
+            }
+        }
+
+        self.last_received_token_time = current_time;
+        self.times_to_tokens.push(time_since_last_batch);
     }
 
     pub fn time_to_first_token(&self) -> Option<std::time::Duration> {
@@ -804,6 +849,25 @@ impl TextGenerationAggregatedResponse {
             Some(start_time) => self.end_time.map(|end_time| end_time - start_time),
             None => None,
         }
+    }
+
+    /// Calculate Time Per Output Token (TPOT) - average time between consecutive tokens
+    pub fn time_per_output_token(&self) -> Option<std::time::Duration> {
+        if self.token_arrival_times.len() < 2 {
+            return None;
+        }
+
+        let mut total_intervals = std::time::Duration::new(0, 0);
+        for i in 1..self.token_arrival_times.len() {
+            total_intervals += self.token_arrival_times[i] - self.token_arrival_times[i - 1];
+        }
+
+        Some(total_intervals / (self.token_arrival_times.len() - 1) as u32)
+    }
+
+    /// Get the arrival time of a specific token (0-indexed)
+    pub fn token_arrival_time(&self, token_index: usize) -> Option<tokio::time::Instant> {
+        self.token_arrival_times.get(token_index).copied()
     }
 }
 

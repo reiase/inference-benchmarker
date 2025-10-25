@@ -33,6 +33,16 @@ pub struct BenchmarkEvent {
     pub results: Option<BenchmarkResults>,
     pub successful_requests: u64,
     pub failed_requests: u64,
+    pub avg_ttft_ms: Option<f64>,
+    pub avg_tpot_ms: Option<f64>,
+    pub ttft_std_ms: Option<f64>,
+    pub tpot_std_ms: Option<f64>,
+    pub input_throughput: Option<f64>,
+    pub output_throughput: Option<f64>,
+    pub total_throughput: Option<f64>,
+    pub sent_requests: u64,
+    pub in_flight_requests: u64,
+    pub completed_requests: u64,
 }
 
 pub enum Event {
@@ -207,6 +217,16 @@ impl Benchmark {
                             successful_requests: progress_evt.progress.successful_requests,
                             failed_requests: progress_evt.progress.failed_requests,
                             results: None,
+                            avg_ttft_ms: progress_evt.progress.avg_ttft_ms,
+                            avg_tpot_ms: progress_evt.progress.avg_tpot_ms,
+                            ttft_std_ms: progress_evt.progress.ttft_std_ms,
+                            tpot_std_ms: progress_evt.progress.tpot_std_ms,
+                            input_throughput: progress_evt.progress.input_throughput,
+                            output_throughput: progress_evt.progress.output_throughput,
+                            total_throughput: progress_evt.progress.total_throughput,
+                            sent_requests: progress_evt.progress.sent_requests,
+                            in_flight_requests: progress_evt.progress.in_flight_requests,
+                            completed_requests: progress_evt.progress.completed_requests,
                         }));
                     }
                 }
@@ -229,6 +249,16 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
+            input_throughput: None,
+            output_throughput: None,
+            total_throughput: None,
+            sent_requests: 0,
+            in_flight_requests: 0,
+            completed_requests: 0,
         }))?;
 
         // create progress handler
@@ -256,6 +286,10 @@ impl Benchmark {
         // send None to close the progress handler
         tx.send(None).await.unwrap();
 
+        // Get final request status
+        let (sent_requests, in_flight_requests, completed_requests) =
+            scheduler.get_final_request_status().await;
+
         // notify end event
         self.event_bus.send(Event::BenchmarkEnd(BenchmarkEvent {
             id: "warmup".to_string(),
@@ -265,6 +299,28 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            input_throughput: results.input_token_throughput_secs().ok(),
+            output_throughput: results.output_token_throughput_secs().ok(),
+            total_throughput: results.total_token_throughput_secs().ok(),
+            sent_requests,
+            in_flight_requests,
+            completed_requests,
         }))?;
         Ok(())
     }
@@ -283,6 +339,16 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
+            input_throughput: None,
+            output_throughput: None,
+            total_throughput: None,
+            sent_requests: 0,
+            in_flight_requests: 0,
+            completed_requests: 0,
         }))?;
 
         // create progress handler
@@ -310,6 +376,10 @@ impl Benchmark {
         // send None to close the progress handler
         tx.send(None).await.unwrap();
 
+        // Get final request status
+        let (sent_requests, in_flight_requests, completed_requests) =
+            scheduler.get_final_request_status().await;
+
         // notify end event
         self.event_bus.send(Event::BenchmarkEnd(BenchmarkEvent {
             id: id.clone(),
@@ -319,6 +389,28 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            input_throughput: results.input_token_throughput_secs().ok(),
+            output_throughput: results.output_token_throughput_secs().ok(),
+            total_throughput: results.total_token_throughput_secs().ok(),
+            sent_requests,
+            in_flight_requests,
+            completed_requests,
         }))?;
         Ok(())
     }
@@ -373,6 +465,16 @@ impl Benchmark {
             results: None,
             successful_requests: 0,
             failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
+            input_throughput: None,
+            output_throughput: None,
+            total_throughput: None,
+            sent_requests: 0,
+            in_flight_requests: 0,
+            completed_requests: 0,
         }))?;
 
         // create progress handler
@@ -399,6 +501,10 @@ impl Benchmark {
         // send None to close the progress handler
         tx.send(None).await.unwrap();
 
+        // Get final request status
+        let (sent_requests, in_flight_requests, completed_requests) =
+            scheduler.get_final_request_status().await;
+
         // notify end event
         self.event_bus.send(Event::BenchmarkEnd(BenchmarkEvent {
             id: format!("constant@{:.2}req/s", rate),
@@ -408,6 +514,28 @@ impl Benchmark {
             results: Some(results.clone()),
             successful_requests: results.successful_requests() as u64,
             failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            input_throughput: results.input_token_throughput_secs().ok(),
+            output_throughput: results.output_token_throughput_secs().ok(),
+            total_throughput: results.total_token_throughput_secs().ok(),
+            sent_requests,
+            in_flight_requests,
+            completed_requests,
         }))?;
         Ok(())
     }
