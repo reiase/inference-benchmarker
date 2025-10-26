@@ -8,13 +8,17 @@ use std::time::Duration;
 
 #[derive(Debug)]
 pub(crate) enum BenchmarkErrors {
+    NoEndTime,
+    NoStartTime,
     NoResponses,
 }
 
 impl Display for BenchmarkErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            NoResponses => write!(f, "Backend did not return any valid response. It is either not responding or test duration is too short."),
+            BenchmarkErrors::NoEndTime => write!(f, "No end time was recorded for the benchmark."),
+            BenchmarkErrors::NoStartTime => write!(f, "No start time was recorded for the benchmark."),
+            BenchmarkErrors::NoResponses => write!(f, "Backend did not return any valid response. It is either not responding or test duration is too short."),
         }
     }
 }
@@ -173,14 +177,26 @@ impl BenchmarkResults {
     pub fn total_tokens_sent(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
+            .map(|response| {
+                response
+                    .request
+                    .clone()
+                    .map(|r| r.num_prompt_tokens)
+                    .unwrap_or_default()
+            })
             .sum()
     }
 
     pub fn total_prompt_tokens(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
+            .map(|response| {
+                response
+                    .request
+                    .clone()
+                    .map(|r| r.num_prompt_tokens)
+                    .unwrap_or_default()
+            })
             .sum()
     }
 
@@ -211,10 +227,9 @@ impl BenchmarkResults {
 
     pub fn duration(&self) -> anyhow::Result<std::time::Duration> {
         if self.is_ready() {
-            Ok(self
-                .end_time()
-                .unwrap()
-                .duration_since(self.start_time().unwrap()))
+            self.end_time()
+                .map(|t| t.duration_since(self.start_time().unwrap()))
+                .ok_or(anyhow::anyhow!(NoResponses))
         } else {
             Err(anyhow::anyhow!(NoResponses))
         }

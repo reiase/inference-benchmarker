@@ -96,6 +96,7 @@ pub async fn run(mut run_config: RunConfiguration, stop_sender: Sender<()>) -> a
         benchmark_kind: match run_config.benchmark_kind.to_lowercase().as_str() {
             "throughput" => BenchmarkKind::Throughput,
             "sweep" => BenchmarkKind::Sweep,
+            "csweep" => BenchmarkKind::ConcurrencySweep,
             "rate" => BenchmarkKind::Rate,
             _ => BenchmarkKind::Sweep,
         },
