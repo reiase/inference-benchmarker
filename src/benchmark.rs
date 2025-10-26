@@ -163,9 +163,9 @@ impl Benchmark {
         self.report.clone()
     }
 
-    // 等待UI更新完成
+    // Wait for UI update to complete
     async fn wait_for_ui_update(&self) {
-        // 给UI一些时间来更新显示
+        // Give UI some time to update display
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
@@ -471,23 +471,27 @@ impl Benchmark {
     pub async fn run_concurrency_sweep(&mut self) -> anyhow::Result<()> {
         info!("Running concurrency sweep benchmark");
 
-        // 找到最优并发数
+        // Find optimal concurrency level
         let optimal_concurrency = self.find_optimal_concurrency().await?;
 
-        // 分析并发扫描结果并生成报告
-        self.analyze_concurrency_sweep_results(optimal_concurrency).await?;
+        // Analyze concurrency sweep results and generate report
+        self.analyze_concurrency_sweep_results(optimal_concurrency)
+            .await?;
 
         Ok(())
     }
 
-    async fn analyze_concurrency_sweep_results(&mut self, optimal_concurrency: u64) -> anyhow::Result<()> {
+    async fn analyze_concurrency_sweep_results(
+        &mut self,
+        optimal_concurrency: u64,
+    ) -> anyhow::Result<()> {
         info!("Analyzing concurrency sweep results");
 
         let results = self.report.get_results();
-        
-        // 收集并发测试结果
+
+        // Collect concurrency test results
         let mut concurrency_results = Vec::new();
-        
+
         for result in results {
             if result.id.starts_with("concurrency#") {
                 concurrency_results.push(result);
@@ -499,34 +503,35 @@ impl Benchmark {
             return Ok(());
         }
 
-        // 分析并发测试结果
+        // Analyze concurrency test results
         let mut concurrency_throughput_map = std::collections::HashMap::new();
         let mut best_throughput = 0.0;
 
         for result in &concurrency_results {
             if let Ok(throughput) = result.successful_request_rate() {
-                let concurrency = result.id
+                let concurrency = result
+                    .id
                     .strip_prefix("concurrency#")
                     .and_then(|s: &str| s.strip_suffix("vus"))
                     .and_then(|s: &str| s.parse::<u64>().ok())
                     .unwrap_or(1);
-                
+
                 concurrency_throughput_map.insert(concurrency, throughput);
-                
-                // 找到最优并发数对应的吞吐量
+
+                // Find throughput corresponding to optimal concurrency
                 if concurrency == optimal_concurrency {
                     best_throughput = throughput;
                 }
             }
         }
 
-        // 生成并发分析报告
+        // Generate concurrency analysis report
         let mut concurrency_analysis = format!(
-            "\n=== 并发扫描分析报告 ===\n\
-            测试的并发级别: {}\n\
-            最优并发数: {} VUs\n\
-            最大吞吐量: {:.2} req/s\n\n\
-            并发级别 vs 吞吐量:\n",
+            "\n=== Concurrency Sweep Analysis Report ===\n\
+            Tested concurrency levels: {}\n\
+            Optimal concurrency: {} VUs\n\
+            Maximum throughput: {:.2} req/s\n\n\
+            Concurrency Level vs Throughput:\n",
             concurrency_throughput_map.len(),
             optimal_concurrency,
             best_throughput
@@ -542,60 +547,64 @@ impl Benchmark {
                 0.0
             };
             concurrency_analysis.push_str(&format!(
-                "  {} VUs: {:.2} req/s (效率: {:.3} req/s/VU)\n",
+                "  {} VUs: {:.2} req/s (efficiency: {:.3} req/s/VU)\n",
                 concurrency, throughput, efficiency
             ));
         }
 
-        // 分析吞吐量变化趋势
+        // Analyze throughput trend
         if concurrency_throughput_map.len() > 1 {
             let throughputs: Vec<f64> = sorted_concurrency.iter().map(|(_, t)| **t).collect();
             let mut increasing = true;
             let mut decreasing = true;
-            
+
             for i in 1..throughputs.len() {
-                if throughputs[i] <= throughputs[i-1] {
+                if throughputs[i] <= throughputs[i - 1] {
                     increasing = false;
                 }
-                if throughputs[i] >= throughputs[i-1] {
+                if throughputs[i] >= throughputs[i - 1] {
                     decreasing = false;
                 }
             }
 
-            concurrency_analysis.push_str("\n吞吐量趋势分析:\n");
+            concurrency_analysis.push_str("\nThroughput Trend Analysis:\n");
             if increasing {
-                concurrency_analysis.push_str("  - 吞吐量随并发数增加而持续增长\n");
-                concurrency_analysis.push_str("  - 建议: 可以尝试更高的并发数以获得更大吞吐量\n");
+                concurrency_analysis
+                    .push_str("  - Throughput continues to increase with higher concurrency\n");
+                concurrency_analysis.push_str(
+                    "  - Recommendation: Try higher concurrency levels for better throughput\n",
+                );
             } else if decreasing {
-                concurrency_analysis.push_str("  - 吞吐量随并发数增加而下降\n");
-                concurrency_analysis.push_str("  - 建议: 系统可能已达到性能瓶颈\n");
+                concurrency_analysis.push_str("  - Throughput decreases with higher concurrency\n");
+                concurrency_analysis.push_str(
+                    "  - Recommendation: System may have reached performance bottleneck\n",
+                );
             } else {
-                concurrency_analysis.push_str("  - 吞吐量变化趋势复杂\n");
-                concurrency_analysis.push_str("  - 建议: 当前最优并发数可能接近系统最佳性能点\n");
+                concurrency_analysis.push_str("  - Throughput trend is complex\n");
+                concurrency_analysis.push_str("  - Recommendation: Current optimal concurrency may be near system's best performance point\n");
             }
         }
 
-
-        // 生成建议
-        concurrency_analysis.push_str("\n=== 建议 ===\n");
+        // Generate recommendations
+        concurrency_analysis.push_str("\n=== Recommendations ===\n");
         concurrency_analysis.push_str(&format!(
-            "1. 推荐网关并发限制: {} 个并发请求\n",
+            "1. Recommended gateway concurrency limit: {} concurrent requests\n",
             optimal_concurrency
         ));
         concurrency_analysis.push_str(&format!(
-            "2. 预期最大吞吐量: {:.2} req/s\n",
+            "2. Expected maximum throughput: {:.2} req/s\n",
             best_throughput
         ));
-        
+
         if optimal_concurrency > 1 {
             let efficiency = best_throughput / optimal_concurrency as f64;
             concurrency_analysis.push_str(&format!(
-                "3. 平均每VU效率: {:.3} req/s/VU\n",
+                "3. Average efficiency per VU: {:.3} req/s/VU\n",
                 efficiency
             ));
         }
 
-        // 发送分析结果到事件总线
+        // Send analysis results to event bus
         self.event_bus.send(Event::Message(MessageEvent {
             message: concurrency_analysis,
             timestamp: chrono::Utc::now(),
@@ -635,7 +644,7 @@ impl Benchmark {
         // create progress handler
         let tx = self.handle_progress(id.clone()).await;
 
-        // 使用用户设置的duration参数
+        // Use user-configured duration parameter
         let test_duration = self.config.duration;
 
         info!(
@@ -674,7 +683,7 @@ impl Benchmark {
             results.successful_requests() + results.failed_requests()
         );
 
-        // 检查是否有成功的请求
+        // Check if there are any successful requests
         if results.successful_requests() == 0 {
             warn!(
                 "No successful requests for concurrency {} after {:?}, this might indicate:",
@@ -683,7 +692,7 @@ impl Benchmark {
             warn!("1. Backend is not responding");
             warn!("2. Test duration is too short for requests to complete");
             warn!("3. Backend is overloaded or has issues");
-            return Ok(0.0); // 返回0吞吐量而不是错误
+            return Ok(0.0); // Return 0 throughput instead of error
         }
 
         let throughput = results.successful_request_rate()?;
@@ -730,7 +739,7 @@ impl Benchmark {
             completed_requests,
         }))?;
 
-        // 等待UI更新完成
+        // Wait for UI update to complete
         self.wait_for_ui_update().await;
 
         Ok(throughput)
@@ -743,7 +752,7 @@ impl Benchmark {
         let mut best_concurrency = 1;
         let mut best_throughput = 0.0;
 
-        // 生成并发数测试序列：1, 2, 5, 10, 20, 50, 100, 200, ...
+        // Generate concurrency test sequence: 1, 2, 5, 10, 20, 50, 100, 200, ...
         let mut concurrency_levels = Vec::new();
         concurrency_levels.push(1);
 
@@ -761,7 +770,7 @@ impl Benchmark {
             }
         }
 
-        // 确保包含最大并发数
+        // Ensure maximum concurrency is included
         if !concurrency_levels.contains(&max_concurrency) {
             concurrency_levels.push(max_concurrency);
         }
@@ -780,7 +789,7 @@ impl Benchmark {
                 best_concurrency = concurrency;
             }
 
-            // 如果连续几个并发数都没有成功请求，可能后端有问题
+            // If no successful requests at low concurrency levels, backend might have issues
             if concurrency <= 5 && throughput == 0.0 {
                 warn!(
                     "No successful requests at low concurrency {}, checking backend connectivity",
@@ -788,7 +797,7 @@ impl Benchmark {
                 );
             }
 
-            // 如果吞吐量开始下降，可以提前停止（可选优化）
+            // If throughput starts declining, can stop early (optional optimization)
             if concurrency > 10 && throughput < best_throughput * 0.9 {
                 warn!(
                     "Throughput declining, stopping early at concurrency {}",
@@ -798,7 +807,7 @@ impl Benchmark {
             }
         }
 
-        // 如果所有测试都没有成功请求，返回错误
+        // If no successful requests found across all tests, return error
         if best_throughput == 0.0 {
             return Err(anyhow::anyhow!(
                 "No successful requests found across all concurrency levels. Please check:\n\
@@ -814,7 +823,7 @@ impl Benchmark {
             best_concurrency, best_throughput
         );
 
-        // 通知事件总线
+        // Notify event bus
         self.event_bus.send(Event::Message(MessageEvent {
             message: format!(
                 "Optimal concurrency found: {} VUs (throughput: {:.2} req/s)",
@@ -826,7 +835,6 @@ impl Benchmark {
 
         Ok(best_concurrency)
     }
-
 
     pub async fn run_rate(&mut self, rate: f64) -> anyhow::Result<()> {
         debug!("Running benchmark with rate: {} req/s", rate);

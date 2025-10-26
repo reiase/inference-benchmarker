@@ -121,7 +121,9 @@ pub async fn run_console(
                         id: event.id,
                         status: BenchmarkStatus::Running,
                         progress: event.progress,
-                        throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
+                        throughput: event
+                            .request_throughput
+                            .map_or("0".to_string(), |e| format!("{e:.2}")),
                         successful_requests: event.successful_requests,
                         failed_requests: event.failed_requests,
                         avg_ttft_ms: event.avg_ttft_ms,
@@ -143,9 +145,17 @@ pub async fn run_console(
                         id: event.id,
                         status: BenchmarkStatus::Completed,
                         progress: 100.0,
-                        throughput: event.request_throughput.map_or("0".to_string(), |e| format!("{e:.2}")),
-                        successful_requests: event.results.as_ref().map_or(0, |r| r.successful_requests() as u64),
-                        failed_requests: event.results.as_ref().map_or(0, |r| r.failed_requests() as u64),
+                        throughput: event
+                            .request_throughput
+                            .map_or("0".to_string(), |e| format!("{e:.2}")),
+                        successful_requests: event
+                            .results
+                            .as_ref()
+                            .map_or(0, |r| r.successful_requests() as u64),
+                        failed_requests: event
+                            .results
+                            .as_ref()
+                            .map_or(0, |r| r.failed_requests() as u64),
                         avg_ttft_ms: event.avg_ttft_ms,
                         avg_tpot_ms: event.avg_tpot_ms,
                         ttft_std_ms: event.ttft_std_ms,
@@ -206,12 +216,12 @@ fn print_config(config: &BenchmarkConfig) {
     println!("{}", "=".repeat(80).blue());
     println!("{}", "🚀 INFERENCE BENCHMARKER".blue().bold());
     println!("{}", "=".repeat(80).blue());
-    
+
     let rate_mode = match config.rates {
         None => "Automatic".to_string(),
         Some(_) => "Manual".to_string(),
     };
-    
+
     println!("{}", format!("Profile: {} | Benchmark: {} | Max VUs: {} | Duration: {} sec | Rates: {} | Warmup: {} sec",
         config.profile.clone().unwrap_or("N/A".to_string()),
         config.benchmark_kind,
@@ -220,7 +230,7 @@ fn print_config(config: &BenchmarkConfig) {
         rate_mode,
         config.warmup_duration.as_secs_f64()
     ).cyan().bold());
-    
+
     println!("{}", "=".repeat(80).blue());
     println!();
 }
@@ -228,13 +238,14 @@ fn print_config(config: &BenchmarkConfig) {
 fn print_benchmark_update(state: &ConsoleState) {
     // Clear screen and move cursor to top
     print!("\x1B[2J\x1B[1;1H");
-    
+
     // Print header
     println!("{}", "BENCHMARK PROGRESS".blue().bold());
     println!("{}", "-".repeat(80).blue());
-    
+
     // Print benchmark table header
-    println!("{:<16} {:<10} {:<5} {:<5} {:<15} {:<18} {:<18} {:<12} {:<12} {:<12} {:<25}",
+    println!(
+        "{:<16} {:<10} {:<5} {:<5} {:<15} {:<18} {:<18} {:<12} {:<12} {:<12} {:<25}",
         "Bench".blue().bold(),
         "Status".blue().bold(),
         "%".blue().bold(),
@@ -248,55 +259,63 @@ fn print_benchmark_update(state: &ConsoleState) {
         "Requests(S|I|D)".blue().bold()
     );
     println!("{}", "-".repeat(80).blue());
-    
+
     // Print benchmark data
     for benchmark in &state.benchmarks {
         let error_rate = if benchmark.failed_requests > 0 {
-            format!("{:4.0}%", 
-                benchmark.failed_requests as f64 / 
-                (benchmark.failed_requests + benchmark.successful_requests) as f64 * 100.0
+            format!(
+                "{:4.0}%",
+                benchmark.failed_requests as f64
+                    / (benchmark.failed_requests + benchmark.successful_requests) as f64
+                    * 100.0
             )
         } else {
             "0%".to_string()
         };
-        
+
         let ttft_display = match (benchmark.avg_ttft_ms, benchmark.ttft_std_ms) {
             (Some(mean), Some(std)) => format!("{:.1}±{:.1}ms", mean, std),
             (Some(mean), None) => format!("{:.1}ms", mean),
             _ => "N/A".to_string(),
         };
-        
+
         let tpot_display = match (benchmark.avg_tpot_ms, benchmark.tpot_std_ms) {
             (Some(mean), Some(std)) => format!("{:.1}±{:.1}ms", mean, std),
             (Some(mean), None) => format!("{:.1}ms", mean),
             _ => "N/A".to_string(),
         };
-        
-        let input_throughput = benchmark.input_throughput.map_or("N/A".to_string(), |t| format!("{:.1}", t));
-        let output_throughput = benchmark.output_throughput.map_or("N/A".to_string(), |t| format!("{:.1}", t));
-        let total_throughput = benchmark.total_throughput.map_or("N/A".to_string(), |t| format!("{:.1}", t));
-        
-        let request_status = format!("{}|{}|{}", 
-            benchmark.sent_requests, 
-            benchmark.in_flight_requests, 
-            benchmark.completed_requests
+
+        let input_throughput = benchmark
+            .input_throughput
+            .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+        let output_throughput = benchmark
+            .output_throughput
+            .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+        let total_throughput = benchmark
+            .total_throughput
+            .map_or("N/A".to_string(), |t| format!("{:.1}", t));
+
+        let request_status = format!(
+            "{}|{}|{}",
+            benchmark.sent_requests, benchmark.in_flight_requests, benchmark.completed_requests
         );
-        
+
         let status_color = match benchmark.status {
             BenchmarkStatus::Running => benchmark.status.to_string().yellow().bold(),
             BenchmarkStatus::Completed => benchmark.status.to_string().green().bold(),
         };
-        
+
         let error_color = if benchmark.failed_requests > 0 {
             error_rate.red().bold()
         } else {
             error_rate.green()
         };
-        
+
         // Create a simple progress bar
         let progress_bar = create_progress_bar(benchmark.progress);
-        
-        println!("{:<16} {:<10} {:<5} {:<5} {:<15} {:<18} {:<18} {:<12} {:<12} {:<12} {:<25}",
+
+        println!(
+            "{:<16} {:<10} {:<5} {:<5} {:<15} {:<18} {:<18} {:<12} {:<12} {:<12} {:<25}",
             benchmark.id.white(),
             status_color,
             format!("{:4.0}%", benchmark.progress).white(),
@@ -309,36 +328,41 @@ fn print_benchmark_update(state: &ConsoleState) {
             format!("Total: {}", total_throughput).red(),
             request_status.white()
         );
-        
+
         // Show progress bar for running benchmarks
         if matches!(benchmark.status, BenchmarkStatus::Running) && benchmark.progress < 100.0 {
             println!("  {} {}", "Progress:".dimmed(), progress_bar);
         }
     }
-    
+
     println!();
-    
+
     // Print recent messages
     if !state.messages.is_empty() {
         println!("{}", "RECENT MESSAGES".blue().bold());
         println!("{}", "-".repeat(80).blue());
-        
+
         for message in state.messages.iter().rev().take(5) {
             let level_color = match message.level {
                 LogLevel::Info => message.level.to_string().green().bold(),
                 LogLevel::Warning => message.level.to_string().yellow().bold(),
                 LogLevel::Error => message.level.to_string().red().bold(),
             };
-            
-            println!("{} {} {}", 
-                message.timestamp.format("%H:%M:%S").to_string().bright_black(),
+
+            println!(
+                "{} {} {}",
+                message
+                    .timestamp
+                    .format("%H:%M:%S")
+                    .to_string()
+                    .bright_black(),
                 level_color,
                 message.message.white()
             );
         }
         println!();
     }
-    
+
     io::stdout().flush().unwrap();
 }
 
@@ -349,9 +373,14 @@ fn print_latest_message(state: &ConsoleState) {
             LogLevel::Warning => message.level.to_string().yellow(),
             LogLevel::Error => message.level.to_string().red(),
         };
-        
-        println!("{} {} {}", 
-            message.timestamp.format("%H:%M:%S").to_string().bright_black(),
+
+        println!(
+            "{} {} {}",
+            message
+                .timestamp
+                .format("%H:%M:%S")
+                .to_string()
+                .bright_black(),
             level_color,
             message.message.white()
         );
@@ -362,9 +391,9 @@ fn create_progress_bar(progress: f64) -> String {
     let width = 20;
     let filled = (progress / 100.0 * width as f64) as usize;
     let empty = width - filled;
-    
+
     let filled_bar = "█".repeat(filled);
     let empty_bar = "░".repeat(empty);
-    
+
     format!("[{}{}]", filled_bar.green(), empty_bar.dimmed())
 }

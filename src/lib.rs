@@ -5,9 +5,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-pub use crate::console::run_console;
 pub use crate::benchmark::{BenchmarkConfig, BenchmarkKind};
 use crate::benchmark::{Event, MessageEvent};
+pub use crate::console::run_console;
 pub use crate::profiles::apply_profile;
 use crate::requests::OpenAITextGenerationBackend;
 pub use crate::requests::TokenizeOptions;
@@ -20,8 +20,8 @@ use tokio::sync::broadcast::Sender;
 use tokio::sync::Mutex;
 use writers::BenchmarkReportWriter;
 
-mod console;
 mod benchmark;
+mod console;
 mod executors;
 mod profiles;
 mod requests;
