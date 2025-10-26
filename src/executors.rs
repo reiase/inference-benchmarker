@@ -96,17 +96,31 @@ impl Executor for ConstantVUsExecutor {
                 return;
             },
             _ = async {
+                let mut duration_reached = false;
                 // replenish VUs as they finish
                 while end_rx.recv().await.is_some() {
                     active_vus.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    if start.elapsed() > self.config.duration{
+                    let elapsed = start.elapsed();
+                    
+                    if elapsed > self.config.duration && !duration_reached {
                         // signal that the VU work is done
                         let _ = responses_tx.send(TextGenerationAggregatedResponse::new_as_ended());
-                        info!("Duration reached, waiting for all VUs to finish...");
-                        if active_vus.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                        info!("Duration reached after {:?}, waiting for all VUs to finish...", elapsed);
+                        duration_reached = true;
+                    }
+                    
+                    if duration_reached {
+                        // Duration reached, just wait for remaining VUs to finish
+                        let remaining_vus = active_vus.load(std::sync::atomic::Ordering::SeqCst);
+                        info!("Duration reached, {} VUs remaining", remaining_vus);
+                        if remaining_vus == 0 {
+                            info!("All VUs finished, exiting");
                             break;
                         }
                     } else {
+                        // Duration not reached yet, start new VU
+                        let elapsed = start.elapsed();
+                        info!("Starting new VU after {:?} (duration: {:?})", elapsed, self.config.duration);
                         let mut requests_guard = requests.lock().await;
                         let request = Arc::from(requests_guard.generate_request());
                         drop(requests_guard);
