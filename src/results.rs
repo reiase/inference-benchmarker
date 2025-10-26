@@ -60,13 +60,26 @@ impl BenchmarkResults {
     }
 
     pub fn end_time(&self) -> Option<tokio::time::Instant> {
+        // 先过滤出有效的响应（有end_time的响应），然后取最后一个
         self.aggregated_responses
+            .iter()
+            .filter_map(|response| response.end_time)
             .last()
-            .and_then(|response| response.end_time)
     }
 
     fn is_ready(&self) -> bool {
-        self.start_time().is_some() && self.end_time().is_some()
+        // 检查是否有有效的响应（有start_time和end_time的响应）
+        let has_valid_responses = self.aggregated_responses
+            .iter()
+            .any(|response| response.start_time.is_some() && response.end_time.is_some());
+        
+        // 如果有有效响应，检查时间完整性
+        if has_valid_responses {
+            self.start_time().is_some() && self.end_time().is_some()
+        } else {
+            // 如果没有有效响应，返回false
+            false
+        }
     }
 
     pub fn failed_requests(&self) -> usize {
@@ -423,7 +436,7 @@ impl BenchmarkResults {
     fn get_successful_responses(&self) -> Vec<&TextGenerationAggregatedResponse> {
         self.aggregated_responses
             .iter()
-            .filter(|response| !response.failed)
+            .filter(|response| !response.failed && response.start_time.is_some() && response.end_time.is_some())
             .collect()
     }
 

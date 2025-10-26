@@ -301,7 +301,7 @@ fn print_benchmark_update(state: &ConsoleState) {
             status_color,
             format!("{:4.0}%", benchmark.progress).white(),
             error_color,
-            format!("{:.2} req/s", benchmark.throughput).green().bold(),
+            format!("{} req/s", benchmark.throughput).green().bold(),
             ttft_display.cyan(),
             tpot_display.magenta(),
             format!("In: {}", input_throughput).blue(),
