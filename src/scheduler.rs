@@ -142,22 +142,22 @@ impl Scheduler {
                         let avg_tpot_ms = result.time_per_output_token_avg().ok().map(|d| d.as_millis() as f64);
                         let ttft_std_ms = result.time_to_first_token_std().ok().map(|d| d.as_millis() as f64);
                         let tpot_std_ms = result.time_per_output_token_std().ok().map(|d| d.as_millis() as f64);
-                        
+
                         // Calculate throughput metrics
                         let input_throughput = result.input_token_throughput_secs().ok();
                         let output_throughput = result.output_token_throughput_secs().ok();
                         let total_throughput = result.total_token_throughput_secs().ok();
-                        
+
                         // Update request status - only count as completed if the response has ended
                         if response_ended {
                             completed_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                             in_flight_requests.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                         }
-                        
+
                         let current_sent = sent_requests.load(std::sync::atomic::Ordering::SeqCst);
                         let current_in_flight = in_flight_requests.load(std::sync::atomic::Ordering::SeqCst);
                         let current_completed = completed_requests.load(std::sync::atomic::Ordering::SeqCst);
-                        
+
                         let _ = progress_tx.send(Some(SchedulerProgress {
                             progress: (100.0 * (1.0 - (expected_duration - start_time.elapsed().as_secs_f64()) / expected_duration)).min(100.0),
                             requests_throughput: result.successful_request_rate().unwrap_or_default(),
@@ -189,10 +189,10 @@ impl Scheduler {
                 Some(in_flight_requests_for_executor),
             )
             .await;
-        
+
         // Wait for the response handler to finish processing all responses
         let _ = response_handler.await;
-        
+
         warn!("{:?}", self.results.clone());
         if self.results.lock().await.successful_requests() == 0 {
             Err(anyhow::anyhow!(NoResponses))

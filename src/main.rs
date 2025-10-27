@@ -36,7 +36,7 @@ struct Args {
     /// A benchmark profile to use
     #[clap(long, env, group = "group_profile")]
     profile: Option<String>,
-    /// The kind of benchmark to run (throughput, sweep, optimum)
+    /// The kind of benchmark to run (throughput, sweep, csweep, rate)
     #[clap(default_value = "sweep", short, long, env, group = "group_manual")]
     benchmark_kind: String,
     /// The duration of the prewarm step ran before the benchmark to warm up the backend (JIT, caches, etc.)

@@ -44,7 +44,12 @@ impl BenchmarkResultsWriter {
             total_requests: results.total_requests() as u64,
             total_tokens: results.total_tokens(),
             token_throughput_secs: results.token_throughput_secs()?,
-            duration_ms: results.duration().ok().unwrap().as_micros() / 1000,
+            duration_ms: results
+                .duration()
+                .map_err(|e| println!("error: {}", e))
+                .unwrap_or_default()
+                .as_micros()
+                / 1000,
             time_to_first_token_ms: PercentilesWriter {
                 p50: results.time_to_first_token_percentile(0.5)?.as_micros() as f64 / 1000.,
                 p60: results.time_to_first_token_percentile(0.6)?.as_micros() as f64 / 1000.,

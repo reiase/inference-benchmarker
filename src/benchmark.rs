@@ -2,7 +2,7 @@ use crate::requests::{TextGenerationBackend, TextRequestGenerator, TokenizeOptio
 use crate::results::{BenchmarkReport, BenchmarkResults};
 use crate::scheduler::{ExecutorType, SchedulerProgress};
 use crate::{executors, scheduler};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ const THROUGHPUT_BUDGET: f64 = 1.2; // sweep up to 120% of max throughput
 pub enum BenchmarkKind {
     Throughput,
     Sweep,
+    ConcurrencySweep,
     Rate,
 }
 
@@ -114,6 +115,13 @@ impl BenchmarkConfig {
                     ));
                 }
             }
+            BenchmarkKind::ConcurrencySweep => {
+                if self.rates.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "rates must not be specified for concurrency_sweep benchmark"
+                    ));
+                }
+            }
             BenchmarkKind::Rate => {
                 if self.rates.is_none() {
                     return Err(anyhow::anyhow!(
@@ -155,6 +163,12 @@ impl Benchmark {
         self.report.clone()
     }
 
+    // Wait for UI update to complete
+    async fn wait_for_ui_update(&self) {
+        // Give UI some time to update display
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
     pub async fn run(&mut self) -> anyhow::Result<BenchmarkReport> {
         self.start_time = Some(tokio::time::Instant::now());
         self.report.start();
@@ -167,6 +181,9 @@ impl Benchmark {
             }
             BenchmarkKind::Sweep => {
                 self.run_sweep().await?;
+            }
+            BenchmarkKind::ConcurrencySweep => {
+                self.run_concurrency_sweep().await?;
             }
             BenchmarkKind::Rate => {
                 self.run_rates().await?;
@@ -451,10 +468,378 @@ impl Benchmark {
         Ok(())
     }
 
+    pub async fn run_concurrency_sweep(&mut self) -> anyhow::Result<()> {
+        info!("Running concurrency sweep benchmark");
+
+        // Find optimal concurrency level
+        let optimal_concurrency = self.find_optimal_concurrency().await?;
+
+        // Analyze concurrency sweep results and generate report
+        self.analyze_concurrency_sweep_results(optimal_concurrency)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn analyze_concurrency_sweep_results(
+        &mut self,
+        optimal_concurrency: u64,
+    ) -> anyhow::Result<()> {
+        info!("Analyzing concurrency sweep results");
+
+        let results = self.report.get_results();
+
+        // Collect concurrency test results
+        let mut concurrency_results = Vec::new();
+
+        for result in results {
+            if result.id.starts_with("concurrency#") {
+                concurrency_results.push(result);
+            }
+        }
+
+        if concurrency_results.is_empty() {
+            warn!("No concurrency test results found for analysis");
+            return Ok(());
+        }
+
+        // Analyze concurrency test results
+        let mut concurrency_throughput_map = std::collections::HashMap::new();
+        let mut best_throughput = 0.0;
+
+        for result in &concurrency_results {
+            if let Ok(throughput) = result.successful_request_rate() {
+                let concurrency = result
+                    .id
+                    .strip_prefix("concurrency#")
+                    .and_then(|s: &str| s.strip_suffix("vus"))
+                    .and_then(|s: &str| s.parse::<u64>().ok())
+                    .unwrap_or(1);
+
+                concurrency_throughput_map.insert(concurrency, throughput);
+
+                // Find throughput corresponding to optimal concurrency
+                if concurrency == optimal_concurrency {
+                    best_throughput = throughput;
+                }
+            }
+        }
+
+        // Generate concurrency analysis report
+        let mut concurrency_analysis = format!(
+            "\n=== Concurrency Sweep Analysis Report ===\n\
+            Tested concurrency levels: {}\n\
+            Optimal concurrency: {} VUs\n\
+            Maximum throughput: {:.2} req/s\n\n\
+            Concurrency Level vs Throughput:\n",
+            concurrency_throughput_map.len(),
+            optimal_concurrency,
+            best_throughput
+        );
+
+        let mut sorted_concurrency: Vec<_> = concurrency_throughput_map.iter().collect();
+        sorted_concurrency.sort_by_key(|(concurrency, _)| **concurrency);
+
+        for (concurrency, throughput) in &sorted_concurrency {
+            let efficiency = if **concurrency > 0 {
+                **throughput / **concurrency as f64
+            } else {
+                0.0
+            };
+            concurrency_analysis.push_str(&format!(
+                "  {} VUs: {:.2} req/s (efficiency: {:.3} req/s/VU)\n",
+                concurrency, throughput, efficiency
+            ));
+        }
+
+        // Analyze throughput trend
+        if concurrency_throughput_map.len() > 1 {
+            let throughputs: Vec<f64> = sorted_concurrency.iter().map(|(_, t)| **t).collect();
+            let mut increasing = true;
+            let mut decreasing = true;
+
+            for i in 1..throughputs.len() {
+                if throughputs[i] <= throughputs[i - 1] {
+                    increasing = false;
+                }
+                if throughputs[i] >= throughputs[i - 1] {
+                    decreasing = false;
+                }
+            }
+
+            concurrency_analysis.push_str("\nThroughput Trend Analysis:\n");
+            if increasing {
+                concurrency_analysis
+                    .push_str("  - Throughput continues to increase with higher concurrency\n");
+                concurrency_analysis.push_str(
+                    "  - Recommendation: Try higher concurrency levels for better throughput\n",
+                );
+            } else if decreasing {
+                concurrency_analysis.push_str("  - Throughput decreases with higher concurrency\n");
+                concurrency_analysis.push_str(
+                    "  - Recommendation: System may have reached performance bottleneck\n",
+                );
+            } else {
+                concurrency_analysis.push_str("  - Throughput trend is complex\n");
+                concurrency_analysis.push_str("  - Recommendation: Current optimal concurrency may be near system's best performance point\n");
+            }
+        }
+
+        // Generate recommendations
+        concurrency_analysis.push_str("\n=== Recommendations ===\n");
+        concurrency_analysis.push_str(&format!(
+            "1. Recommended gateway concurrency limit: {} concurrent requests\n",
+            optimal_concurrency
+        ));
+        concurrency_analysis.push_str(&format!(
+            "2. Expected maximum throughput: {:.2} req/s\n",
+            best_throughput
+        ));
+
+        if optimal_concurrency > 1 {
+            let efficiency = best_throughput / optimal_concurrency as f64;
+            concurrency_analysis.push_str(&format!(
+                "3. Average efficiency per VU: {:.3} req/s/VU\n",
+                efficiency
+            ));
+        }
+
+        // Send analysis results to event bus
+        self.event_bus.send(Event::Message(MessageEvent {
+            message: concurrency_analysis,
+            timestamp: chrono::Utc::now(),
+            level: log::Level::Info,
+        }))?;
+
+        info!("Concurrency sweep analysis completed");
+        Ok(())
+    }
+
+    async fn test_concurrency_level(&mut self, concurrency: u64) -> anyhow::Result<f64> {
+        debug!("Testing concurrency level: {}", concurrency);
+
+        let id = format!("concurrency#{}vus", concurrency);
+
+        // notify start event
+        self.event_bus.send(Event::BenchmarkStart(BenchmarkEvent {
+            id: id.clone(),
+            scheduler_type: ExecutorType::ConstantVUs,
+            request_throughput: None,
+            progress: 0.0,
+            results: None,
+            successful_requests: 0,
+            failed_requests: 0,
+            avg_ttft_ms: None,
+            avg_tpot_ms: None,
+            ttft_std_ms: None,
+            tpot_std_ms: None,
+            input_throughput: None,
+            output_throughput: None,
+            total_throughput: None,
+            sent_requests: 0,
+            in_flight_requests: 0,
+            completed_requests: 0,
+        }))?;
+
+        // create progress handler
+        let tx = self.handle_progress(id.clone()).await;
+
+        // Use user-configured duration parameter
+        let test_duration = self.config.duration;
+
+        info!(
+            "Testing concurrency {} with duration {:?}",
+            concurrency, test_duration
+        );
+
+        // start scheduler with specific concurrency level
+        let mut scheduler = scheduler::Scheduler::new(
+            id.clone(),
+            self.backend.clone(),
+            ExecutorType::ConstantVUs,
+            executors::ExecutorConfig {
+                max_vus: concurrency,
+                duration: test_duration,
+                rate: None,
+            },
+            self.requests.clone(),
+            tx.clone(),
+            self.stop_sender.clone(),
+        );
+
+        let start_time = std::time::Instant::now();
+        scheduler.run().await?;
+        let elapsed = start_time.elapsed();
+        let results = scheduler.get_results().lock().await.clone();
+
+        info!(
+            "Concurrency {} test completed in {:?}",
+            concurrency, elapsed
+        );
+        info!(
+            "Results: {} successful, {} failed, {} total requests",
+            results.successful_requests(),
+            results.failed_requests(),
+            results.successful_requests() + results.failed_requests()
+        );
+
+        // Check if there are any successful requests
+        if results.successful_requests() == 0 {
+            warn!(
+                "No successful requests for concurrency {} after {:?}, this might indicate:",
+                concurrency, elapsed
+            );
+            warn!("1. Backend is not responding");
+            warn!("2. Test duration is too short for requests to complete");
+            warn!("3. Backend is overloaded or has issues");
+            return Ok(0.0); // Return 0 throughput instead of error
+        }
+
+        let throughput = results.successful_request_rate()?;
+
+        self.report.add_benchmark_result(results.clone());
+
+        // send None to close the progress handler
+        tx.send(None).await.unwrap();
+
+        // Get final request status
+        let (sent_requests, in_flight_requests, completed_requests) =
+            scheduler.get_final_request_status().await;
+
+        // notify end event
+        self.event_bus.send(Event::BenchmarkEnd(BenchmarkEvent {
+            id: id.clone(),
+            scheduler_type: ExecutorType::ConstantVUs,
+            request_throughput: Some(throughput),
+            progress: 100.0,
+            results: Some(results.clone()),
+            successful_requests: results.successful_requests() as u64,
+            failed_requests: results.failed_requests() as u64,
+            avg_ttft_ms: results
+                .time_to_first_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            avg_tpot_ms: results
+                .time_per_output_token_avg()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            ttft_std_ms: results
+                .time_to_first_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            tpot_std_ms: results
+                .time_per_output_token_std()
+                .ok()
+                .map(|d| d.as_millis() as f64),
+            input_throughput: results.input_token_throughput_secs().ok(),
+            output_throughput: results.output_token_throughput_secs().ok(),
+            total_throughput: results.total_token_throughput_secs().ok(),
+            sent_requests,
+            in_flight_requests,
+            completed_requests,
+        }))?;
+
+        // Wait for UI update to complete
+        self.wait_for_ui_update().await;
+
+        Ok(throughput)
+    }
+
+    async fn find_optimal_concurrency(&mut self) -> anyhow::Result<u64> {
+        info!("Finding optimal concurrency level");
+
+        let max_concurrency = self.config.max_vus;
+        let mut best_concurrency = 1;
+        let mut best_throughput = 0.0;
+
+        // Generate concurrency test sequence: 1, 2, 5, 10, 20, 50, 100, 200, ...
+        let mut concurrency_levels = Vec::new();
+        concurrency_levels.push(1);
+
+        let mut level = 2;
+        while level <= max_concurrency {
+            concurrency_levels.push(level);
+            if level < 10 {
+                level += 1;
+            } else if level < 50 {
+                level += 5;
+            } else if level < 100 {
+                level += 10;
+            } else {
+                level += 20;
+            }
+        }
+
+        // Ensure maximum concurrency is included
+        if !concurrency_levels.contains(&max_concurrency) {
+            concurrency_levels.push(max_concurrency);
+        }
+        concurrency_levels.sort();
+        concurrency_levels.dedup();
+
+        info!("Testing concurrency levels: {:?}", concurrency_levels);
+
+        for concurrency in concurrency_levels {
+            let throughput = self.test_concurrency_level(concurrency).await?;
+
+            info!("Concurrency {}: {:.2} req/s", concurrency, throughput);
+
+            if throughput > best_throughput {
+                best_throughput = throughput;
+                best_concurrency = concurrency;
+            }
+
+            // If no successful requests at low concurrency levels, backend might have issues
+            if concurrency <= 5 && throughput == 0.0 {
+                warn!(
+                    "No successful requests at low concurrency {}, checking backend connectivity",
+                    concurrency
+                );
+            }
+
+            // If throughput starts declining, can stop early (optional optimization)
+            if concurrency > 10 && throughput < best_throughput * 0.9 {
+                warn!(
+                    "Throughput declining, stopping early at concurrency {}",
+                    concurrency
+                );
+                break;
+            }
+        }
+
+        // If no successful requests found across all tests, return error
+        if best_throughput == 0.0 {
+            return Err(anyhow::anyhow!(
+                "No successful requests found across all concurrency levels. Please check:\n\
+                1. Backend is running and accessible\n\
+                2. Backend URL is correct\n\
+                3. API key is valid (if required)\n\
+                4. Test duration is long enough for requests to complete"
+            ));
+        }
+
+        info!(
+            "Optimal concurrency: {} (throughput: {:.2} req/s)",
+            best_concurrency, best_throughput
+        );
+
+        // Notify event bus
+        self.event_bus.send(Event::Message(MessageEvent {
+            message: format!(
+                "Optimal concurrency found: {} VUs (throughput: {:.2} req/s)",
+                best_concurrency, best_throughput
+            ),
+            timestamp: chrono::Utc::now(),
+            level: log::Level::Info,
+        }))?;
+
+        Ok(best_concurrency)
+    }
+
     pub async fn run_rate(&mut self, rate: f64) -> anyhow::Result<()> {
         debug!("Running benchmark with rate: {} req/s", rate);
 
-        let id = format!("constant@{:.2}req/s", rate);
+        let id = format!("rate@{:.1}reqs", rate);
 
         // notify start event
         self.event_bus.send(Event::BenchmarkStart(BenchmarkEvent {
@@ -507,7 +892,7 @@ impl Benchmark {
 
         // notify end event
         self.event_bus.send(Event::BenchmarkEnd(BenchmarkEvent {
-            id: format!("constant@{:.2}req/s", rate),
+            id: format!("rate@{:.1}reqs", rate),
             scheduler_type: ExecutorType::ConstantArrivalRate,
             request_throughput: results.successful_request_rate().ok(),
             progress: 100.0,

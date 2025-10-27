@@ -8,13 +8,17 @@ use std::time::Duration;
 
 #[derive(Debug)]
 pub(crate) enum BenchmarkErrors {
+    NoEndTime,
+    NoStartTime,
     NoResponses,
 }
 
 impl Display for BenchmarkErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            NoResponses => write!(f, "Backend did not return any valid response. It is either not responding or test duration is too short."),
+            BenchmarkErrors::NoEndTime => write!(f, "No end time was recorded for the benchmark."),
+            BenchmarkErrors::NoStartTime => write!(f, "No start time was recorded for the benchmark."),
+            BenchmarkErrors::NoResponses => write!(f, "Backend did not return any valid response. It is either not responding or test duration is too short."),
         }
     }
 }
@@ -56,13 +60,27 @@ impl BenchmarkResults {
     }
 
     pub fn end_time(&self) -> Option<tokio::time::Instant> {
+        // First filter out valid responses (those with end_time), then take the last one
         self.aggregated_responses
+            .iter()
+            .filter_map(|response| response.end_time)
             .last()
-            .and_then(|response| response.end_time)
     }
 
     fn is_ready(&self) -> bool {
-        self.start_time().is_some() && self.end_time().is_some()
+        // Check if there are any valid responses (those with start_time and end_time)
+        let has_valid_responses = self
+            .aggregated_responses
+            .iter()
+            .any(|response| response.start_time.is_some() && response.end_time.is_some());
+
+        // If there are valid responses, check time integrity
+        if has_valid_responses {
+            self.start_time().is_some() && self.end_time().is_some()
+        } else {
+            // If no valid responses, return false
+            false
+        }
     }
 
     pub fn failed_requests(&self) -> usize {
@@ -173,14 +191,26 @@ impl BenchmarkResults {
     pub fn total_tokens_sent(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
+            .map(|response| {
+                response
+                    .request
+                    .clone()
+                    .map(|r| r.num_prompt_tokens)
+                    .unwrap_or_default()
+            })
             .sum()
     }
 
     pub fn total_prompt_tokens(&self) -> u64 {
         self.get_successful_responses()
             .iter()
-            .map(|response| response.request.clone().map(|r| r.num_prompt_tokens).unwrap_or_default())
+            .map(|response| {
+                response
+                    .request
+                    .clone()
+                    .map(|r| r.num_prompt_tokens)
+                    .unwrap_or_default()
+            })
             .sum()
     }
 
@@ -211,10 +241,9 @@ impl BenchmarkResults {
 
     pub fn duration(&self) -> anyhow::Result<std::time::Duration> {
         if self.is_ready() {
-            Ok(self
-                .end_time()
-                .unwrap()
-                .duration_since(self.start_time().unwrap()))
+            self.end_time()
+                .map(|t| t.duration_since(self.start_time().unwrap()))
+                .ok_or(anyhow::anyhow!(NoResponses))
         } else {
             Err(anyhow::anyhow!(NoResponses))
         }
@@ -408,7 +437,9 @@ impl BenchmarkResults {
     fn get_successful_responses(&self) -> Vec<&TextGenerationAggregatedResponse> {
         self.aggregated_responses
             .iter()
-            .filter(|response| !response.failed)
+            .filter(|response| {
+                !response.failed && response.start_time.is_some() && response.end_time.is_some()
+            })
             .collect()
     }
 
